@@ -1,0 +1,2 @@
+# TeleSpam
+Simple Telegram spammer 
