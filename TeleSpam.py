@@ -18,6 +18,7 @@ BASE_DIR = os.path.dirname(__file__)
 CONFIG_FILE = os.path.join(BASE_DIR, "session_config.json")
 MESSAGE_FILE = os.path.join(BASE_DIR, "message.txt")
 SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")
+STATE_FILE = os.path.join(BASE_DIR, "state.json")
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 SESSION_NAME = None
 send_mode = "saved"
@@ -51,6 +52,18 @@ def save_config(name, data):
     path = os.path.join(SESSIONS_DIR, f"{name}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f)
+
+def load_state():
+    global send_mode, interval_minutes
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        send_mode = data.get("mode", send_mode)
+        interval_minutes = data.get("interval", interval_minutes)
+
+def save_state():
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"mode": send_mode, "interval": interval_minutes}, f)
 
 async def authorize():
     clear()
@@ -176,6 +189,7 @@ async def change_target():
         send_target = input("@username или ID: ").strip().lstrip("@")
         send_mode = "one"
         all_dialogs_count = None
+    save_state()
 
 async def change_interval():
     global interval_minutes
@@ -187,9 +201,11 @@ async def change_interval():
             interval_minutes = minutes
     except:
         pass
+    save_state()
 
 async def main():
     global current_user, client_instance, all_dialogs_count
+    load_state()
     app = await init_client()
     async with app:
         client_instance = app
