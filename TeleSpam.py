@@ -20,6 +20,7 @@ MESSAGE_FILE = os.path.join(BASE_DIR, "message.txt")
 SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 SESSION_NAME = None
+stop_event = asyncio.Event()
 send_mode = "saved"
 send_target = None
 current_user = None
@@ -37,8 +38,16 @@ def get_message():
     with open(MESSAGE_FILE, "r", encoding="utf-8") as f:
         return f.read().strip()
 
+def set_message(text: str):
+    with open(MESSAGE_FILE, "w", encoding="utf-8") as f:
+        f.write(text)
+
 def list_sessions():
     return [f.replace(".session", "") for f in os.listdir(SESSIONS_DIR) if f.endswith(".session")]
+
+def set_session(name: str):
+    global SESSION_NAME
+    SESSION_NAME = name
 
 def load_config(name):
     path = os.path.join(SESSIONS_DIR, f"{name}.json")
@@ -52,37 +61,65 @@ def save_config(name, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f)
 
-async def authorize():
+def delete_session(name):
+    """Delete session files for given name."""
+    sess = os.path.join(SESSIONS_DIR, f"{name}.session")
+    cfg = os.path.join(SESSIONS_DIR, f"{name}.json")
+    if os.path.exists(sess):
+        os.remove(sess)
+    if os.path.exists(cfg):
+        os.remove(cfg)
+
+async def logout_session(name):
+    """Log out of the specified session."""
+    config = load_config(name)
+    if not config:
+        return False
+    async with Client(os.path.join(SESSIONS_DIR, name), api_id=config["api_id"], api_hash=config["api_hash"]) as app:
+        await app.log_out()
+    return True
+
+async def authorize(api_id=None, api_hash=None, phone=None, code=None, password=None):
+    """Authorize account. If parameters are None, fallback to interactive input."""
     clear()
     print("Авторизация с https://my.telegram.org/apps:")
-    api_id = int(input("API ID: ").strip())
-    api_hash = input("API HASH: ").strip()
-    phone = input("Телефон (с +кодом): ").strip()
+    if api_id is None:
+        api_id = int(input("API ID: ").strip())
+    if api_hash is None:
+        api_hash = input("API HASH: ").strip()
+    if phone is None:
+        phone = input("Телефон (с +кодом): ").strip()
     app = Client(os.path.join(SESSIONS_DIR, SESSION_NAME), api_id=api_id, api_hash=api_hash)
     await app.connect()
     code_data = await app.send_code(phone)
-    code = input(f"Код для {phone}: ").strip()
+    if code is None:
+        code = input(f"Код для {phone}: ").strip()
     try:
         await app.sign_in(phone_number=phone, phone_code_hash=code_data.phone_code_hash, phone_code=code)
     except SessionPasswordNeeded:
-        password = input("Пароль (если есть): ").strip()
+        if password is None:
+            password = input("Пароль (если есть): ").strip()
         await app.check_password(password)
     await app.disconnect()
     save_config(SESSION_NAME, {"api_id": api_id, "api_hash": api_hash, "phone": phone})
     print("✅ Вход выполнен")
     time.sleep(1)
 
-async def init_client():
+async def init_client(name=None):
+    """Initialize client for specified session name."""
     global SESSION_NAME
+    if name is not None:
+        SESSION_NAME = name
     sessions = list_sessions()
     if not sessions:
-        SESSION_NAME = "account1"
+        SESSION_NAME = name or "account1"
         await authorize()
         sessions = list_sessions()
     if not sessions:
         print("❌ Не удалось создать сессию.")
         exit()
-    SESSION_NAME = sessions[0]
+    if SESSION_NAME is None:
+        SESSION_NAME = sessions[0]
     config = load_config(SESSION_NAME)
     return Client(os.path.join(SESSIONS_DIR, SESSION_NAME), api_id=config["api_id"], api_hash=config["api_hash"])
 
@@ -113,11 +150,10 @@ async def send_messages(app):
     msg = get_message()
     if not msg:
         print("❌ message.txt пуст")
-        input("Enter...")
         return
 
     try:
-        while True:
+        while not stop_event.is_set():
             start = datetime.now()
             if send_mode == "saved":
                 print("→ Режим: В избранное")
@@ -148,14 +184,17 @@ async def send_messages(app):
             next_time = datetime.now() + timedelta(minutes=interval_minutes)
             print(f"⏳ Ждём {interval_minutes} минут... (до {next_time.strftime('%H:%M:%S')})")
             try:
-                await asyncio.sleep(interval_minutes * 60)
+                await asyncio.wait_for(stop_event.wait(), interval_minutes * 60)
+            except asyncio.TimeoutError:
+                continue
             except KeyboardInterrupt:
                 print("⛔ Остановлено пользователем (Ctrl+C)")
                 return
 
     except Exception as e:
         print(f"❌ Ошибка: {e}")
-    input("\nНажмите Enter...")
+    finally:
+        stop_event.clear()
 
 async def change_target():
     global send_mode, send_target, all_dialogs_count
@@ -187,6 +226,26 @@ async def change_interval():
             interval_minutes = minutes
     except:
         pass
+
+async def start(mode="saved", target=None, interval=1, session_name=None):
+    """Start sending messages using given parameters."""
+    global send_mode, send_target, interval_minutes, current_user, client_instance, all_dialogs_count
+    send_mode = mode
+    send_target = target
+    interval_minutes = interval
+    app = await init_client(session_name)
+    async with app:
+        client_instance = app
+        current_user = await app.get_me()
+        if send_mode == "all":
+            dialogs = await get_all_dialog_ids(app)
+            all_dialogs_count = len(dialogs)
+        await send_messages(app)
+
+def stop():
+    """Signal sender to stop."""
+    if not stop_event.is_set():
+        stop_event.set()
 
 async def main():
     global current_user, client_instance, all_dialogs_count
