@@ -1,11 +1,3 @@
 # TeleSpam
 
-Пример простого веб-интерфейса для рассылки сообщений через Pyrogram.
-
-## Запуск
-
-```bash
-python app.py
-```
-
-Сервер будет доступен на `http://localhost:8080`.
+In development
