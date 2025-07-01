@@ -4,6 +4,9 @@ import asyncio
 import json
 import time
 import logging
+import threading
+import io
+from contextlib import redirect_stdout
 from pyrogram import Client
 from pyrogram.errors import PeerIdInvalid, SessionPasswordNeeded
 from colorama import init, Fore, Style
@@ -26,6 +29,9 @@ current_user = None
 all_dialogs_count = None
 client_instance = None
 interval_minutes = 1
+run_flag = False
+spam_thread = None
+log_buffer = io.StringIO()
 
 def clear():
     os.system("cls" if os.name == "nt" else "clear")
@@ -36,6 +42,13 @@ def get_message():
             f.write('<emoji id="5276032951342088188">\ud83d\udca5</emoji> Telegram mass sender')
     with open(MESSAGE_FILE, "r", encoding="utf-8") as f:
         return f.read().strip()
+
+def set_message(text: str):
+    with open(MESSAGE_FILE, "w", encoding="utf-8") as f:
+        f.write(text)
+
+def get_log():
+    return log_buffer.getvalue()
 
 def list_sessions():
     return [f.replace(".session", "") for f in os.listdir(SESSIONS_DIR) if f.endswith(".session")]
@@ -108,7 +121,9 @@ def render_header():
     print(" ")
 
 async def send_messages(app):
-    global all_dialogs_count
+    global all_dialogs_count, run_flag
+    if not run_flag:
+        run_flag = True
     render_header()
     msg = get_message()
     if not msg:
@@ -117,7 +132,7 @@ async def send_messages(app):
         return
 
     try:
-        while True:
+        while run_flag:
             start = datetime.now()
             if send_mode == "saved":
                 print("→ Режим: В избранное")
@@ -148,14 +163,20 @@ async def send_messages(app):
             next_time = datetime.now() + timedelta(minutes=interval_minutes)
             print(f"⏳ Ждём {interval_minutes} минут... (до {next_time.strftime('%H:%M:%S')})")
             try:
-                await asyncio.sleep(interval_minutes * 60)
+                for _ in range(int(interval_minutes * 60)):
+                    if not run_flag:
+                        break
+                    await asyncio.sleep(1)
+                if not run_flag:
+                    break
             except KeyboardInterrupt:
                 print("⛔ Остановлено пользователем (Ctrl+C)")
                 return
 
     except Exception as e:
         print(f"❌ Ошибка: {e}")
-    input("\nНажмите Enter...")
+    if run_flag:
+        input("\nНажмите Enter...")
 
 async def change_target():
     global send_mode, send_target, all_dialogs_count
@@ -187,6 +208,47 @@ async def change_interval():
             interval_minutes = minutes
     except:
         pass
+
+def configure(mode: str = "saved", target: str | None = None, interval: int = 1):
+    global send_mode, send_target, interval_minutes
+    send_mode = mode
+    send_target = target
+    if interval > 0:
+        interval_minutes = interval
+
+def create_session(name: str):
+    global SESSION_NAME
+    SESSION_NAME = name
+    asyncio.run(authorize())
+
+async def _spam_runner():
+    global current_user, client_instance, all_dialogs_count
+    app = await init_client()
+    async with app:
+        client_instance = app
+        current_user = await app.get_me()
+        if send_mode == "all":
+            dialogs = await get_all_dialog_ids(app)
+            all_dialogs_count = len(dialogs)
+        await send_messages(app)
+
+def start_spam():
+    global spam_thread, run_flag, log_buffer
+    if spam_thread and spam_thread.is_alive():
+        return
+    run_flag = True
+    log_buffer = io.StringIO()
+
+    def _thread():
+        with redirect_stdout(log_buffer):
+            asyncio.run(_spam_runner())
+
+    spam_thread = threading.Thread(target=_thread, daemon=True)
+    spam_thread.start()
+
+def stop_spam():
+    global run_flag
+    run_flag = False
 
 async def main():
     global current_user, client_instance, all_dialogs_count
