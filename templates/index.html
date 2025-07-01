@@ -3,15 +3,86 @@
 <head>
     <meta charset="UTF-8">
     <title>TeleSpam</title>
+    <style>
+        body { background:#222; color:#fff; font-family:Arial, sans-serif; }
+        .panel { padding:20px; background:#333; border-radius:8px; margin-bottom:10px; }
+        button { padding:5px 10px; margin:5px; }
+        textarea { width:100%; height:120px; }
+        #logs { white-space:pre-wrap; background:#111; padding:10px; border-radius:8px; height:200px; overflow-y:scroll; }
+    </style>
 </head>
 <body>
-    <h1>TeleSpam</h1>
-    <form method="post">
-        <label>Цель рассылки (all, favorites или ID):</label><br>
-        <input type="text" name="target" value="all"><br><br>
-        <label>Интервал (секунды):</label><br>
-        <input type="number" name="interval" value="60"><br><br>
-        <button type="submit">Запустить рассылку</button>
-    </form>
+<h1>TeleSpam Web</h1>
+<div class="panel">
+    <label>Сессия:</label>
+    <select id="session"></select>
+</div>
+<div class="panel">
+    <textarea id="message"></textarea>
+</div>
+<div class="panel">
+    <label>Цель:</label>
+    <select id="target">
+        <option value="all">Все чаты</option>
+        <option value="favorites">Избранное</option>
+        <option value="id">ID</option>
+    </select>
+    <input type="text" id="targetId" placeholder="ID" style="display:none;" />
+    <label>Интервал (мин):</label>
+    <input type="number" id="interval" value="60" min="1" max="1500" />
+    <button id="start">Старт</button>
+    <button id="stop" style="display:none;">Стоп</button>
+</div>
+<div id="logs" class="panel"></div>
+<script>
+async function loadSessions(){
+    const r=await fetch('/api/sessions');
+    const data=await r.json();
+    const sel=document.getElementById('session');
+    sel.innerHTML='';
+    data.sessions.forEach(s=>{
+        const opt=document.createElement('option');
+        opt.value=s; opt.textContent=s; if(s===data.active) opt.selected=true;
+        sel.appendChild(opt);
+    });
+}
+async function loadMessage(){
+    const r=await fetch('/api/message');
+    const data=await r.json();
+    document.getElementById('message').value=data.text;
+}
+async function saveMessage(){
+    const text=document.getElementById('message').value;
+    await fetch('/api/message',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+}
+async function start(){
+    await saveMessage();
+    const session=document.getElementById('session').value;
+    await fetch('/api/use_session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:session})});
+    const target=document.getElementById('target').value;
+    let targetVal=target;
+    if(target==='id') targetVal=document.getElementById('targetId').value;
+    const interval=parseFloat(document.getElementById('interval').value)*60;
+    await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:targetVal,interval})});
+    document.getElementById('start').style.display='none';
+    document.getElementById('stop').style.display='inline';
+}
+async function stop(){
+    await fetch('/api/stop',{method:'POST'});
+    document.getElementById('start').style.display='inline';
+    document.getElementById('stop').style.display='none';
+}
+async function poll(){
+    const r=await fetch('/api/logs');
+    const data=await r.json();
+    document.getElementById('logs').textContent=data.logs.join('\n');
+    if(data.running) setTimeout(poll,2000);
+}
+
+document.getElementById('start').onclick=()=>{start().then(poll)};
+document.getElementById('stop').onclick=stop;
+document.getElementById('target').onchange=()=>{document.getElementById('targetId').style.display=document.getElementById('target').value==='id'?'inline':'none';};
+window.onload=()=>{loadSessions();loadMessage();};
+</script>
 </body>
 </html>
